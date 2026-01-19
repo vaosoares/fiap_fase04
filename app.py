@@ -2,26 +2,26 @@ import streamlit as st
 import pandas as pd
 import joblib
 import matplotlib.pyplot as plt
-import seaborn as sns
 import numpy as np
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_curve, roc_auc_score
-
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
 
 # ============================
-# Carregar modelo
+# Carregar pipeline treinado
 # ============================
+# ⚠️ Certifique-se de ter salvo com:
+# joblib.dump(grid_lr.best_estimator_, "modelo_ibovespa.pkl")
 modelo = joblib.load("modelo_ibovespa.pkl")
 
 st.title("📈 Previsão de Tendências - Ibovespa")
 st.write("Selecione o período e clique em 'Atualizar dados' para visualizar as previsões e métricas.")
 
 # ============================
-# Carregar dados fixos
+# Carregar dados
 # ============================
 df = pd.read_csv("dados_ibovespa.csv", sep=",", dayfirst=True)
 df["Data"] = pd.to_datetime(df["Data"], dayfirst=True, errors="coerce")
 
-# Limpar Vol. e Var%
+# Funções de limpeza
 def converter_volume(valor):
     valor = str(valor).replace(",", ".").strip()
     if valor.endswith("B"):
@@ -79,9 +79,16 @@ if st.sidebar.button("Atualizar dados"):
     df["MM_20d"] = df["Último"].rolling(window=20).mean()
     df["MM_60d"] = df["Último"].rolling(window=60).mean()
     df["MM_200d"] = df["Último"].rolling(window=200).mean()
-    df["Delta"] = df["Último"].diff().shift(1)
+
+    # Delta e Return (iguais ao treino)
+    df["Delta"] = df["Último"].diff()
     df["Return"] = df["Último"].pct_change().shift(1)
 
+    # Target com threshold (igual ao treino)
+    threshold = 0.005  # 0.5% de variação
+    df["Target"] = (df["Delta"] > threshold).astype(int)
+
+    # Lags e demais features
     for i in range(1, 11):
         df[f"Delta_lag{i}"] = df["Delta"].shift(i)
 
@@ -96,14 +103,11 @@ if st.sidebar.button("Atualizar dados"):
     df["MA132"] = df["Delta"].rolling(window=132).mean()
     df["MA252"] = df["Delta"].rolling(window=252).mean()
 
-    # Target para validação
-    df["Target"] = (df["Último"].shift(-1) > df["Último"]).astype(int)
-
-    # Remover NaN primeiro
+    # Remover NaN
     df_completo = df.dropna().copy()
 
-    # Aplicar filtro de datas depois
-    df_model = df_completo[(df_completo["Data"] >= pd.to_datetime(data_inicio)) & 
+    # Aplicar filtro de datas
+    df_model = df_completo[(df_completo["Data"] >= pd.to_datetime(data_inicio)) &
                            (df_completo["Data"] <= pd.to_datetime(data_fim))].copy()
 
     st.subheader("📊 Dados filtrados")
@@ -123,16 +127,14 @@ if st.sidebar.button("Atualizar dados"):
     st.write(df_model[["Data", "Último", "Previsão", "Probabilidade"]].head(20))
 
     # ============================
-    # Painel de métricas
+    # Métricas
     # ============================
-    from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
-
     y_true = df_model["Target"]
 
     acc = accuracy_score(y_true, y_pred)
-    prec = precision_score(y_true, y_pred)
-    rec = recall_score(y_true, y_pred)
-    f1 = f1_score(y_true, y_pred)
+    prec = precision_score(y_true, y_pred, zero_division=0)
+    rec = recall_score(y_true, y_pred, zero_division=0)
+    f1 = f1_score(y_true, y_pred, zero_division=0)
     auc = roc_auc_score(y_true, y_proba)
 
     st.subheader("📊 Métricas de Validação do Modelo")
@@ -142,14 +144,6 @@ if st.sidebar.button("Atualizar dados"):
     st.write(f"**F1-score:** {f1:.2f}")
     st.write(f"**AUC:** {auc:.2f}")
 
-    st.markdown("### 🔎 Análise de Performance")
-    if acc > 0.7 and auc > 0.7:
-        st.success("O modelo apresenta boa capacidade de previsão, com equilíbrio entre precisão e recall.")
-    elif acc > 0.6:
-        st.warning("O modelo tem desempenho razoável, mas pode estar sofrendo com falsos positivos ou negativos.")
-    else:
-        st.error("O modelo apresenta baixa performance neste período. Pode ser necessário recalibrar ou treinar novamente.")
-
     # ============================
     # Gráfico temporal
     # ============================
@@ -157,6 +151,7 @@ if st.sidebar.button("Atualizar dados"):
     fig, ax = plt.subplots(figsize=(10, 5))
     ax.plot(df_model["Data"], df_model["Último"], color="black", label="Preço de fechamento")
     colors = np.where(df_model["Previsão"] == 1, "tab:blue", "tab:red")
-    ax.scatter(df_model["Data"], df_model["Último"], c=colors, s=30, label="Previsão (azul=alta, vermelho=queda)")
+    ax.scatter(df_model["Data"], df_model["Último"], c=colors, s=30,
+               label="Previsão (azul=alta, vermelho=queda)")
     ax.legend()
     st.pyplot(fig)
